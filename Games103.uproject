@@ -1,0 +1,16 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "{020BA491-411D-8BD7-B45A-DDA89FA47609}",
+	"Category": "",
+	"Description": "",
+	"Modules": [
+		{
+			"Name": "Games103",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"AdditionalDependencies": [
+				"Engine"
+			]
+		}
+	]
+}
