@@ -88,6 +88,11 @@ void UCustomRigidbodyComponent::TickComponent(float DeltaTime, enum ELevelTick T
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
+	if (!bEnableSimulation)
+	{
+		return;
+	}
+
 	RemainTime += DeltaTime;
 	while (RemainTime > SubStepTime)
 	{
@@ -106,21 +111,20 @@ FVector UCustomRigidbodyComponent::GetForce() const
 
 void UCustomRigidbodyComponent::UpdateRigidbodyState(const float DeltaTime)
 {
-	const FVector Force = Mass * Gravity + GetForce();
-
+	const FVector Force = Mass * Gravity - LinearDamping * LinearVelocity + GetForce();
 	const FVector NewPosition = Position + LinearVelocity * DeltaTime + 0.5f * Acceleration * DeltaTime * DeltaTime;
 	const FVector NewAccleration = Force * InvMass;
 	const FVector NewLinearVelocity = LinearVelocity + 0.5f * (Acceleration + NewAccleration) * DeltaTime;
 	Position = NewPosition;
 	Acceleration = NewAccleration;
-	LinearVelocity = LinearDecay * NewLinearVelocity;
+	LinearVelocity = NewLinearVelocity;
 
-	AngularVelocity *= AngularDecay;
 	Rotation += FQuat(AngularVelocity.X, AngularVelocity.Y, AngularVelocity.Z, 0.0f) * Rotation * (0.5f * DeltaTime);
 	Rotation.Normalize();
+	AngularVelocity -= AngularDamping * AngularVelocity * DeltaTime;
 }
 
-void UCustomRigidbodyComponent::PostUpdateRigidbodyState()
+void UCustomRigidbodyComponent::PostUpdateRigidbodyState() 
 {
 	AActor* Owner = GetOwner();
 	Owner->SetActorLocation(Position + Rotation.RotateVector(-CenterOfMass));
@@ -150,7 +154,8 @@ void UCustomRigidbodyComponent::PerformRigidBodyCollision(const FObstacleInfo& I
 		return;
 	}
 
-	float MaxCollisionDistance = 0.0f;
+	int32 NumVerticesPosition = 0;
+	FVector DeltaPosition(0.0f);
 	FVector DeltaLinearVelocity(0.0f);
 	FVector DeltaAngularVelocity(0.0f);
 	int32 NumVerticesVelocity = 0;
@@ -167,7 +172,8 @@ void UCustomRigidbodyComponent::PerformRigidBodyCollision(const FObstacleInfo& I
 		const bool IsCollision = Phi < 0.0f;
 		if (IsCollision)
 		{
-			MaxCollisionDistance = FMath::Max(MaxCollisionDistance, -Phi);
+			DeltaPosition -= Phi * ObstacleNormal;
+			NumVerticesPosition++;
 			if (FVector::DotProduct(Va, ObstacleNormal) < 0.0f)
 			{
 				const float ImpulseMagNum = -(1.0f + Restitution) * FVector::DotProduct(Va, ObstacleNormal);
@@ -180,13 +186,23 @@ void UCustomRigidbodyComponent::PerformRigidBodyCollision(const FObstacleInfo& I
 			}
 		}
 	}
-	Position += MaxCollisionDistance * ObstacleNormal;
+	Position += NumVerticesPosition > 0 ? DeltaPosition / NumVerticesPosition : FVector(0.0f);
 	const float RecipeNumVertices = NumVerticesVelocity > 0 ? 1.0f / NumVerticesVelocity : 0.0f;
 	LinearVelocity += DeltaLinearVelocity * RecipeNumVertices;
 	AngularVelocity += DeltaAngularVelocity * RecipeNumVertices;
-	if (NumVerticesVelocity)
-	{
-		GEngine->AddOnScreenDebugMessage(1, 3, FColor::Red, DeltaAngularVelocity.ToString());
-	}
 }
+
+void UCustomRigidbodyComponent::Reset(const FVector& NewPosition, const FQuat& NewRotation)
+{
+	Position = NewPosition;
+	Acceleration = LinearVelocity = AngularVelocity = FVector(0);
+	Rotation = NewRotation;
+	PostUpdateRigidbodyState();
+}
+
+void UCustomRigidbodyComponent::ApplyVelocity(const FVector& NewVelocity)
+{
+	LinearVelocity = NewVelocity;
+}
+
 

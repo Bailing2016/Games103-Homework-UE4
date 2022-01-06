@@ -32,19 +32,28 @@ public:
 	FVector Gravity = FVector(0.0f, 0.0f, -980.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "CustomRigidbody")
-	float Restitution = 0.5f;
+	float Restitution = 0.3f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "CustomRigidbody")
-	float LinearDecay = 0.999f;
+	float LinearDamping = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "CustomRigidbody")
-	float AngularDecay = 0.98f;
+	float AngularDamping = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CustomRigidbody")
 	float SubStepTime = 1.0f / 60;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "CustomRigidbody")
-	FName ObstacleTag = "";
+	FName ObstacleTag = "Obstacle";
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CustomRigidbody")
+	bool bEnableSimulation = true;
+
+	UFUNCTION(BlueprintCallable, Category = "CustomRigidbody")
+	void Reset(const FVector& NewPosition, const FQuat& NewRotation);
+
+	UFUNCTION(BlueprintCallable, Category = "CustomRigidbody")
+	void ApplyVelocity(const FVector& NewVelocity);
 
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime, enum ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
