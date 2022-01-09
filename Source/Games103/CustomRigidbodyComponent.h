@@ -32,13 +32,20 @@ public:
 	FVector Gravity = FVector(0.0f, 0.0f, -980.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "CustomRigidbody")
-	float Restitution = 0.3f;
+	float Restitution = 0.1f;
+
+	// 保证速度在很小的时候，恢复力不会导致抖动问题.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "CustomRigidbody")
+	float RestitutionDamping = 1e-3f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "CustomRigidbody")
-	float LinearDamping = 1.0f;
+	float Friction = 0.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "CustomRigidbody")
-	float AngularDamping = 1.0f;
+	float LinearDamping = 0.3f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "CustomRigidbody")
+	float AngularDamping = 0.8f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CustomRigidbody")
 	float SubStepTime = 1.0f / 60;
@@ -50,7 +57,7 @@ public:
 	bool bEnableSimulation = true;
 
 	UFUNCTION(BlueprintCallable, Category = "CustomRigidbody")
-	void Reset(const FVector& NewPosition, const FQuat& NewRotation);
+	void Reset(const FVector& NewPosition, const FQuat& NewRotation, const bool bUpdateActorState = true);
 
 	UFUNCTION(BlueprintCallable, Category = "CustomRigidbody")
 	void ApplyVelocity(const FVector& NewVelocity);
@@ -68,12 +75,11 @@ private:
 	FMatrix InvInertiaMatrix;
 	TArray<FObstacleInfo> ObstablesInfo;
 	float RemainTime = 0.0f;
-	// 苇莱尔积分使用的相关变量.
+	// 状态
 	FVector Position;
-	FVector Acceleration;
 	FVector LinearVelocity;
-	FVector AngularVelocity;
 	FQuat Rotation;
+	FVector AngularVelocity;
 
 	void InitRigidbodyState();
 	void CollectObstacleInfo();
@@ -84,5 +90,14 @@ private:
 	void PostUpdateRigidbodyState();
 	void PerformRigidbodyCollision();
 	void PerformRigidBodyCollision(const FObstacleInfo& Info, const FTransform& Trans, const FBox& CurRigidbodyBounds);
+
+	FORCEINLINE FMatrix GetCrossProductMatrix(const FVector& Vector)
+	{
+		FMatrix Matrix(FMatrix::Identity);
+		Matrix.SetAxis(0, FVector(0, -Vector.Z, Vector.Y));
+		Matrix.SetAxis(1, FVector(Vector.Z, 0, -Vector.X));
+		Matrix.SetAxis(2, FVector(-Vector.Y, Vector.X, 0));
+		return Matrix;
+	}
 
 };

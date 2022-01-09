@@ -22,12 +22,7 @@ void UCustomRigidbodyComponent::InitRigidbodyState()
 	VertexBufferPtr = &(RenderData->LODResources[0].VertexBuffers.PositionVertexBuffer);
 	CalculateRigidbodyParameters();
 	OnMassChanged();
-
-	const AActor* Owner = GetOwner();
-	check(Owner);
-	Position = GetComponentTransform().TransformPosition(CenterOfMass);
-	Acceleration = LinearVelocity = AngularVelocity = FVector(0);
-	Rotation = GetComponentQuat();
+	Reset(GetComponentTransform().TransformPosition(CenterOfMass), GetComponentQuat(), false);
 }
 
 void UCustomRigidbodyComponent::CollectObstacleInfo()
@@ -111,17 +106,26 @@ FVector UCustomRigidbodyComponent::GetForce() const
 
 void UCustomRigidbodyComponent::UpdateRigidbodyState(const float DeltaTime)
 {
-	const FVector Force = Mass * Gravity - LinearDamping * LinearVelocity + GetForce();
-	const FVector NewPosition = Position + LinearVelocity * DeltaTime + 0.5f * Acceleration * DeltaTime * DeltaTime;
-	const FVector NewAccleration = Force * InvMass;
-	const FVector NewLinearVelocity = LinearVelocity + 0.5f * (Acceleration + NewAccleration) * DeltaTime;
-	Position = NewPosition;
-	Acceleration = NewAccleration;
-	LinearVelocity = NewLinearVelocity;
+	// 使用改进欧拉法, 具有二阶精度.
+	const float HalfTime = DeltaTime * 0.5f;
+	// 预报
+	const FVector Force = Mass * Gravity + GetForce();
+	const FVector NewPosition = Position + LinearVelocity * DeltaTime;
+	const FVector Accleration = Force * InvMass - LinearDamping * LinearVelocity;
+	const FVector NewLinearVelocity = LinearVelocity + Accleration * DeltaTime;
+	// 矫正
+	Position += (LinearVelocity + NewLinearVelocity) * HalfTime;
+	const FVector NewAccleration = Force * InvMass - LinearDamping * NewLinearVelocity;
+	LinearVelocity += (Accleration + NewAccleration) * HalfTime;
 
-	Rotation += FQuat(AngularVelocity.X, AngularVelocity.Y, AngularVelocity.Z, 0.0f) * Rotation * (0.5f * DeltaTime);
+	// 更新角速度和旋转
+	const FVector NewAngualerVelocity = AngularVelocity - AngularDamping * AngularVelocity;
+	const FQuat DeltaRotation = FQuat(AngularVelocity.X, AngularVelocity.Y, AngularVelocity.Z, 0.0f) * Rotation * HalfTime;
+	const FQuat NewRotation = (Rotation + DeltaRotation).GetNormalized();
+	const FQuat NewDeltaRotation = FQuat(NewAngualerVelocity.X, NewAngualerVelocity.Y, NewAngualerVelocity.Z, 0.0f) * NewRotation * HalfTime;
+	Rotation += (DeltaRotation + NewDeltaRotation) * 0.5f;
 	Rotation.Normalize();
-	AngularVelocity -= AngularDamping * AngularVelocity * DeltaTime;
+	AngularVelocity -= AngularDamping * (AngularVelocity + NewAngualerVelocity) * HalfTime;
 }
 
 void UCustomRigidbodyComponent::PostUpdateRigidbodyState() 
@@ -149,55 +153,71 @@ void UCustomRigidbodyComponent::PerformRigidbodyCollision()
 void UCustomRigidbodyComponent::PerformRigidBodyCollision(const FObstacleInfo& Info, const FTransform& Trans, const FBox& CurRigidbodyBounds)
 {
 	const auto [ObstacleBounds, ObstacleNormal, ObstaclePosition] = Info;
+	// AABB 不相交，不可能有点和障碍物相交了.
 	if (!ObstacleBounds.Intersect(CurRigidbodyBounds))
 	{
 		return;
 	}
 
+	float DeltaPosition = 0.0f;
 	int32 NumVerticesPosition = 0;
-	FVector DeltaPosition(0.0f);
-	FVector DeltaLinearVelocity(0.0f);
-	FVector DeltaAngularVelocity(0.0f);
+	FVector DeltaVelocity(0.0f);
 	int32 NumVerticesVelocity = 0;
-	const FMatrix TransMatrix = Trans.ToMatrixNoScale();
-	const FMatrix InvInertiaMatrixWS = TransMatrix * InvInertiaMatrix * TransMatrix.GetTransposed();
 	const uint32 NumVertices = VertexBufferPtr->GetNumVertices();
 	for (uint32 Index = 0; Index < NumVertices; Index++)
 	{
 		const FVector& VertexMS = VertexBufferPtr->VertexPosition(Index);
 		const FVector& VertexWS = Trans.TransformPosition(VertexMS);
 		const FVector Ra = Trans.TransformVector(VertexMS - CenterOfMass);
-		const FVector Va = LinearVelocity + FVector::CrossProduct(AngularVelocity, Ra);
-		const float Phi = FVector::DotProduct(VertexWS - ObstaclePosition, ObstacleNormal);
-		const bool IsCollision = Phi < 0.0f;
-		if (IsCollision)
+		const FVector Va = LinearVelocity + (AngularVelocity ^ Ra);
+		const float Phi = (VertexWS - ObstaclePosition) | ObstacleNormal;
+		if (Phi < 0.0f)
 		{
-			DeltaPosition -= Phi * ObstacleNormal;
+			DeltaPosition -= Phi;
 			NumVerticesPosition++;
-			if (FVector::DotProduct(Va, ObstacleNormal) < 0.0f)
+			if ((Va | ObstacleNormal) < 0.0f)
 			{
-				const float ImpulseMagNum = -(1.0f + Restitution) * FVector::DotProduct(Va, ObstacleNormal);
-				const FVector InvIRa = InvInertiaMatrixWS.TransformVector(FVector::CrossProduct(Ra, ObstacleNormal));
-				const float ImpulseMagDen = InvMass + FVector::DotProduct(ObstacleNormal, FVector::CrossProduct(InvIRa, Ra));
-				const float ImpulseMag = ImpulseMagNum / ImpulseMagDen;
-				DeltaLinearVelocity += ImpulseMag * ObstacleNormal * InvMass;
-				DeltaAngularVelocity += ImpulseMag * InvInertiaMatrixWS.TransformVector(FVector::CrossProduct(Ra, ObstacleNormal));
+				DeltaVelocity += Ra;
 				NumVerticesVelocity++;
 			}
 		}
 	}
-	Position += NumVerticesPosition > 0 ? DeltaPosition / NumVerticesPosition : FVector(0.0f);
-	const float RecipeNumVertices = NumVerticesVelocity > 0 ? 1.0f / NumVerticesVelocity : 0.0f;
-	LinearVelocity += DeltaLinearVelocity * RecipeNumVertices;
-	AngularVelocity += DeltaAngularVelocity * RecipeNumVertices;
+
+	Position += NumVerticesPosition > 0 ? (DeltaPosition / NumVerticesPosition) * ObstacleNormal : FVector(0.0f);
+
+	if (NumVerticesVelocity > 0)
+	{
+		// 计算碰撞后的速度
+		const FMatrix TransMatrix = Trans.ToMatrixNoScale();
+		const FMatrix InvInertiaMatrixWS = TransMatrix * InvInertiaMatrix * TransMatrix.GetTransposed();
+		const FVector Ra = DeltaVelocity / NumVerticesVelocity;
+		const FVector Va = LinearVelocity + (AngularVelocity ^ Ra);
+		const float NormalSpeed = Va | ObstacleNormal;
+		const FVector VaN = NormalSpeed * ObstacleNormal;
+		const FVector VaT = Va - VaN;
+		// 根据FMath::Max的定义，如果VaT.Size() = 0，那么结果应该是0，所以无需判断?
+		const float A = FMath::Max(1 - Friction * (1 + Restitution) * VaN.Size() / VaT.Size(), 0.0f);
+		// 这里有个trick, 就是速度越大恢复力效果越接近真实值.
+		const FVector NewVaN = -Restitution * FMath::Clamp(FMath::Abs(NormalSpeed) * RestitutionDamping, 0.0f, 1.0f) * VaN;
+		const FVector NewVaT = A * VaT;
+		const FMatrix CrossProductMatrix = GetCrossProductMatrix(Ra);
+		// todo FMatrix居然没有重载-运算符?
+		const FMatrix K = FMatrix::Identity * InvMass + (CrossProductMatrix * InvInertiaMatrixWS * CrossProductMatrix * -1.0f);
+		const FVector J = K.Inverse().TransformVector(NewVaN + NewVaT - Va);
+		LinearVelocity += InvMass * J;
+		AngularVelocity += InvInertiaMatrixWS.TransformVector(Ra ^ J);
+	}
 }
 
-void UCustomRigidbodyComponent::Reset(const FVector& NewPosition, const FQuat& NewRotation)
+void UCustomRigidbodyComponent::Reset(const FVector& NewPosition, const FQuat& NewRotation, const bool bUpdateActorState)
 {
 	Position = NewPosition;
-	Acceleration = LinearVelocity = AngularVelocity = FVector(0);
+	LinearVelocity = AngularVelocity = FVector(0);
 	Rotation = NewRotation;
-	PostUpdateRigidbodyState();
+	if (bUpdateActorState)
+	{
+		PostUpdateRigidbodyState();
+	}
 }
 
 void UCustomRigidbodyComponent::ApplyVelocity(const FVector& NewVelocity)
